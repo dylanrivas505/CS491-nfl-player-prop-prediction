@@ -19,6 +19,7 @@ def load_nfl_dataset(
     # Load polars DataFrame from nflreadpy
     player_stats = nfl.load_player_stats(seasons)
 
+
     # Columns we care about right now
     cols = [
         "player_id",

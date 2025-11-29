@@ -72,6 +72,8 @@ def train_ppo(
     lr=3e-4,
     seed=0,
     save_path="ppo_nfl.pt",
+    device=None,
+    return_model=False,
 ):
     # ---------- Seeding ----------
     random.seed(seed)
@@ -79,12 +81,13 @@ def train_ppo(
     torch.manual_seed(seed)
 
 # ---------- Device ----------
-    if torch.cuda.is_available():
+    if device is None:
+        if torch.cuda.is_available():
             device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")  # Apple Silicon GPU
-    else:
-        device = torch.device("cpu")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")  # Apple Silicon GPU
+        else:
+            device = torch.device("cpu")
     print(f"Using device: {device}")
 
     # ---------- Data / Env ----------
@@ -246,6 +249,8 @@ def train_ppo(
     torch.save(model.state_dict(), save_path)
     print(f"Saved PPO model to {save_path}")
 
+    if return_model:
+        return episode_rewards, model
     return episode_rewards
 
 
