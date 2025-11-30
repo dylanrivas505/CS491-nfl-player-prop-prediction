@@ -5,6 +5,7 @@ Runs multiple seeds per config, times training, and reports mean/std of masked M
 
 import itertools
 import time
+import csv
 from collections import defaultdict
 from typing import List, Tuple
 
@@ -67,8 +68,11 @@ def run_sweeps():
     print(f"Running sweeps on device: {device}")
 
     # Load once; feature variants are applied downstream
-    X, y, feature_names, target_mask, positions = load_nfl_dataset(
-        return_feature_names=True, return_target_mask=True, return_positions=True
+    X, y, feature_names, target_mask, positions, target_norm_stats = load_nfl_dataset(
+        return_feature_names=True,
+        return_target_mask=True,
+        return_positions=True,
+        return_target_norm_stats=True,
     )
 
     results = []
@@ -99,6 +103,9 @@ def run_sweeps():
                     train["y"],
                     target_mask=train["mask"],
                     shuffle=True,
+                    target_mean=target_norm_stats["mean"],
+                    target_std=target_norm_stats["std"],
+                    max_episode_steps=1024,
                 )
 
                 start = time.perf_counter()
@@ -115,9 +122,12 @@ def run_sweeps():
                 train_time = time.perf_counter() - start
 
                 val_mse = evaluate_model(model, val["X"], val["y"], val["mask"], device)
-                final_reward = (
-                    float(np.mean(ep_rewards[-10:])) if len(ep_rewards) >= 10 else float(np.mean(ep_rewards))
-                )
+                if len(ep_rewards) == 0:
+                    final_reward = 0.0
+                else:
+                    final_reward = (
+                        float(np.mean(ep_rewards[-10:])) if len(ep_rewards) >= 10 else float(np.mean(ep_rewards))
+                    )
 
                 print(
                     f"  Seed {seed}: val_masked_mse={val_mse:.3f} "
@@ -152,18 +162,56 @@ def summarize_results(results):
         grouped[key].append(r)
 
     print("\n=== Aggregated results (mean ± std over seeds) ===")
+    with open("sweep_results.csv", "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "feature_variant",
+                "lr",
+                "rollout_len",
+                "hidden_sizes",
+                "val_mse_mean",
+                "val_mse_std",
+                "final_reward_mean",
+                "final_reward_std",
+                "train_time_mean",
+                "train_time_std",
+            ]
+        )
+
     for key, runs in grouped.items():
         fv, lr, rollout, hidden = key
         val_mses = np.array([r["val_mse"] for r in runs])
         rewards = np.array([r["final_reward"] for r in runs])
         times = np.array([r["train_time_sec"] for r in runs])
 
+        val_mean, val_std = val_mses.mean(), val_mses.std()
+        rew_mean, rew_std = rewards.mean(), rewards.std()
+        time_mean, time_std = times.mean(), times.std()
+
         print(
             f"[fv={fv} lr={lr} rollout={rollout} hidden={hidden}] "
-            f"val_mse={val_mses.mean():.3f}±{val_mses.std():.3f} "
-            f"final_reward={rewards.mean():.3f}±{rewards.std():.3f} "
-            f"time={times.mean():.1f}s±{times.std():.1f}s"
+            f"val_mse={val_mean:.3f}±{val_std:.3f} "
+            f"final_reward={rew_mean:.3f}±{rew_std:.3f} "
+            f"time={time_mean:.1f}s±{time_std:.1f}s"
         )
+
+        with open("sweep_results.csv", "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                [
+                    fv,
+                    lr,
+                    rollout,
+                    hidden,
+                    val_mean,
+                    val_std,
+                    rew_mean,
+                    rew_std,
+                    time_mean,
+                    time_std,
+                ]
+            )
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ class NFLPlayerPropEnv(gym.Env):
     
     metadata = {"render_modes": []}
 
-    def __init__(self, X, y, target_mask=None, shuffle=True):
+    def __init__(self, X, y, target_mask=None, shuffle=True, target_mean=None, target_std=None, max_episode_steps=None):
         super().__init__()
 
         self.X = X.astype(np.float32)   # (num_samples, obs_dim)
@@ -22,6 +22,9 @@ class NFLPlayerPropEnv(gym.Env):
             target_mask = np.ones_like(self.y, dtype=np.float32)
         self.target_mask = target_mask.astype(np.float32)
         self.shuffle = shuffle
+        self.target_mean = None if target_mean is None else target_mean.astype(np.float32)
+        self.target_std = None if target_std is None else target_std.astype(np.float32)
+        self.max_episode_steps = max_episode_steps
         
         self.num_samples = self.X.shape[0]
         self.obs_dim = self.X.shape[1]
@@ -45,6 +48,7 @@ class NFLPlayerPropEnv(gym.Env):
         )
 
         self.idx = 0  # position within current episode
+        self.steps_in_ep = 0
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -56,6 +60,7 @@ class NFLPlayerPropEnv(gym.Env):
             self.indices = np.arange(self.num_samples)
 
         self.idx = 0
+        self.steps_in_ep = 0
         obs = self.X[self.indices[self.idx]]
         info = {}
 
@@ -70,14 +75,25 @@ class NFLPlayerPropEnv(gym.Env):
         true_vals = self.y[self.indices[self.idx]]
         mask = self.target_mask[self.indices[self.idx]]
 
+        # Normalize targets for reward if stats provided
+        if self.target_mean is not None and self.target_std is not None:
+            norm_true = (true_vals - self.target_mean) / self.target_std
+            norm_action = (action - self.target_mean) / self.target_std
+        else:
+            norm_true = true_vals
+            norm_action = action
+
         # Only score relevant targets for this position; avoid divide-by-zero
         denom = np.maximum(mask.sum(), 1.0)
-        mse = np.sum(((action - true_vals) ** 2) * mask) / denom
+        mse = np.sum(((norm_action - norm_true) ** 2) * mask) / denom
         reward = -mse
 
+        self.steps_in_ep += 1
         self.idx += 1
         terminated = self.idx >= self.num_samples
         truncated = False
+        if self.max_episode_steps is not None and self.steps_in_ep >= self.max_episode_steps:
+            truncated = True
 
         if not terminated:
             obs = self.X[self.indices[self.idx]]

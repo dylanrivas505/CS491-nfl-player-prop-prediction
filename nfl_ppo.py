@@ -140,7 +140,8 @@ def train_ppo(
 
             actions_buf[step] = torch.tensor(action_np, dtype=torch.float32, device=device)
             logprobs_buf[step] = log_prob
-            rewards_buf[step] = reward
+            # Ensure reward is a torch scalar on the correct device
+            rewards_buf[step] = torch.as_tensor(reward, dtype=torch.float32, device=device)
             dones_buf[step] = float(done)
             values_buf[step] = value
 
