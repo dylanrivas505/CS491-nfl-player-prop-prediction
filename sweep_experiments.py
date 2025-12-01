@@ -16,17 +16,32 @@ from load_stats import load_nfl_dataset, train_val_split
 from envs.nfl_env import NFLPlayerPropEnv
 from nfl_ppo import train_ppo
 
+# Position-specific target weights helper
+def build_weight_matrix(pos_arr):
+    pos_weights = {
+        "QB": np.array([1.2, 0.3, 0.1, 0.1], dtype=np.float32),
+        "RB": np.array([0.1, 1.0, 0.8, 0.8], dtype=np.float32),
+        "WR": np.array([0.05, 0.2, 1.0, 1.0], dtype=np.float32),
+        "TE": np.array([0.05, 0.2, 1.0, 1.0], dtype=np.float32),
+    }
+    default_w = np.ones(4, dtype=np.float32)
+    return np.vstack([pos_weights.get(p, default_w) for p in pos_arr])
+
 
 # Adjust these to keep runtime manageable.
+RUNS_CSV = "sweep_runs_top.csv"
+RESULTS_CSV = "sweep_results_top.csv"
+
 SWEEP_CONFIG = {
-    "feature_variants": ["full", "no_history"],  # drop rolling history for no_history
+    # Narrowed to better-performing variants
+    "feature_variants": ["full", "no_history"],
     "learning_rates": [3e-4, 1e-4],
     "rollout_lens": [1024, 2048],
     "hidden_sizes": [(128, 128), (256, 256)],
     "clip_coefs": [0.2, 0.1],
-    "reward_temperatures": [0.2, 0.5],
-    "max_episode_steps": [512, 256],
-    "total_timesteps": 20_000,
+    "reward_temperatures": [0.5],  # sharper rewards already tried; keep softer setting
+    "max_episode_steps": [512],
+    "total_timesteps": 50_000,  # give PPO more room to learn
     "num_epochs": 10,
     "seeds": [0, 1, 2],
     "val_frac": 0.2,
@@ -176,7 +191,7 @@ def run_sweeps():
 def summarize_results(results):
     grouped = defaultdict(list)
     # Write per-run results
-    with open("sweep_runs.csv", "w", newline="") as f:
+    with open(RUNS_CSV, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
             [
@@ -223,7 +238,7 @@ def summarize_results(results):
         grouped[key].append(r)
 
     print("\n=== Aggregated results (mean ± std over seeds) ===")
-    with open("sweep_results.csv", "w", newline="") as f:
+    with open(RESULTS_CSV, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
             [
@@ -260,7 +275,7 @@ def summarize_results(results):
             f"time={time_mean:.1f}s±{time_std:.1f}s"
         )
 
-        with open("sweep_results.csv", "a", newline="") as f:
+        with open(RESULTS_CSV, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(
                 [
