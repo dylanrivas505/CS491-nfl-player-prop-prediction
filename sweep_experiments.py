@@ -3,11 +3,12 @@ Sweep script for PPO hyperparameters and feature variants.
 Runs multiple seeds per config, times training, and reports mean/std of masked MSE and rewards.
 """
 
+import os
 import itertools
 import time
 import csv
 from collections import defaultdict
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -31,6 +32,7 @@ def build_weight_matrix(pos_arr):
 # Adjust these to keep runtime manageable.
 RUNS_CSV = "sweep_runs_top.csv"
 RESULTS_CSV = "sweep_results_top.csv"
+RUN_LOG_DIR = "sweep_episode_logs"
 
 SWEEP_CONFIG = {
     # Narrowed to better-performing variants
@@ -46,6 +48,8 @@ SWEEP_CONFIG = {
     "seeds": [0, 1, 2],
     "val_frac": 0.2,
 }
+
+os.makedirs(RUN_LOG_DIR, exist_ok=True)
 
 
 def get_device():
@@ -81,6 +85,44 @@ def apply_feature_variant(X, feature_names: List[str], variant: str):
         names_reduced = [feature_names[i] for i in keep_idx]
         return X_reduced, names_reduced
     raise ValueError(f"Unknown feature variant: {variant}")
+
+
+def format_config_name(
+    feature_variant: str,
+    lr: float,
+    rollout_len: int,
+    hidden_sizes: Tuple[int, int],
+    clip_coef: float,
+    reward_temp: float,
+    max_ep_steps: int,
+    seed: Optional[int] = None,
+) -> str:
+    """Stable, filesystem-safe identifier for a single sweep run."""
+    hidden_str = "x".join(str(h) for h in hidden_sizes)
+    parts = [
+        f"fv={feature_variant}",
+        f"lr={lr}",
+        f"rollout={rollout_len}",
+        f"hidden={hidden_str}",
+        f"clip={clip_coef}",
+        f"temp={reward_temp}",
+        f"maxep={max_ep_steps}",
+    ]
+    if seed is not None:
+        parts.append(f"seed={seed}")
+    return "_".join(parts)
+
+
+def save_episode_rewards(run_name: str, episode_rewards: List[float]) -> str:
+    """Write per-episode reward trace so we can plot mean/std across seeds."""
+    os.makedirs(RUN_LOG_DIR, exist_ok=True)
+    path = os.path.join(RUN_LOG_DIR, f"{run_name}.csv")
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["episode", "reward"])
+        for idx, reward in enumerate(episode_rewards, start=1):
+            writer.writerow([idx, reward])
+    return path
 
 
 def run_sweeps():
@@ -169,6 +211,11 @@ def run_sweeps():
                     f"final_reward={final_reward:.3f} time={train_time:.1f}s"
                 )
 
+                log_name = format_config_name(
+                    feature_variant, lr, rollout_len, hidden_sizes, clip_coef, reward_temp, max_ep_steps, seed
+                )
+                reward_log_path = save_episode_rewards(log_name, ep_rewards)
+
                 results.append(
                     {
                         "feature_variant": feature_variant,
@@ -182,6 +229,7 @@ def run_sweeps():
                         "val_mse": val_mse,
                         "final_reward": final_reward,
                         "train_time_sec": train_time,
+                        "episode_reward_log": reward_log_path,
                     }
                 )
 
@@ -206,6 +254,7 @@ def summarize_results(results):
                 "val_mse",
                 "final_reward",
                 "train_time_sec",
+                "episode_reward_log",
             ]
         )
         for r in results:
@@ -222,6 +271,7 @@ def summarize_results(results):
                     r["val_mse"],
                     r["final_reward"],
                     r["train_time_sec"],
+                    r["episode_reward_log"],
                 ]
             )
 
@@ -298,12 +348,3 @@ def summarize_results(results):
 
 if __name__ == "__main__":
     run_sweeps()
-def build_weight_matrix(pos_arr):
-    pos_weights = {
-        "QB": np.array([1.2, 0.3, 0.1, 0.1], dtype=np.float32),
-        "RB": np.array([0.1, 1.0, 0.8, 0.8], dtype=np.float32),
-        "WR": np.array([0.05, 0.2, 1.0, 1.0], dtype=np.float32),
-        "TE": np.array([0.05, 0.2, 1.0, 1.0], dtype=np.float32),
-    }
-    default_w = np.ones(4, dtype=np.float32)
-    return np.vstack([pos_weights.get(p, default_w) for p in pos_arr])
