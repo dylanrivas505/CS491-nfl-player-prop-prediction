@@ -37,10 +37,10 @@ RUN_LOG_DIR = "sweep_episode_logs"
 SWEEP_CONFIG = {
     # Narrowed to better-performing variants
     "feature_variants": ["full", "no_history"],
-    "learning_rates": [3e-4, 1e-4],
-    "rollout_lens": [1024, 2048],
-    "hidden_sizes": [(128, 128), (256, 256)],
-    "clip_coefs": [0.2, 0.1],
+    "learning_rates": [3e-4, 1e-4, 5e-4],
+    "rollout_lens": [512, 1024, 2048],
+    "hidden_sizes": [(128, 128), (256, 256), (512, 512)],
+    "clip_coefs": [0.2, 0.1, 0.25],
     "reward_temperatures": [0.5],  # sharper rewards already tried; keep softer setting
     "max_episode_steps": [512],
     "total_timesteps": 50_000,  # give PPO more room to learn

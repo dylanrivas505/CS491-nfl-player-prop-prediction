@@ -55,16 +55,29 @@ def moving_average(values: np.ndarray, window: int) -> np.ndarray:
     return smoothed
 
 
-def aggregate(groups: Dict, top_k: int, smooth_window: int) -> Tuple[List, List]:
-    """Return (top_runs, warnings). Each item is (meta, episodes, mean, std, mean_final)."""
+def aggregate(groups: Dict, top_k: int, smooth_window: int, group_by: str | None = None, top_per_group: int = 1):
+    """
+    Return (runs, warnings).
+    Each item is (meta, episodes, mean, std, mean_final).
+    If group_by is set, returns top_per_group per group value; otherwise returns top_k overall.
+    """
     ranked = []
     warnings = []
+    cfg_runs = []
     for cfg_key, runs in groups.items():
         reward_lists = runs["rewards"]
         if not reward_lists:
             warnings.append(f"No rewards for config {cfg_key}")
             continue
-        finals = [r[-1] for r in reward_lists if len(r) > 0]
+        # Match sweep_experiments final_reward: mean of last 10 episodes (or all if shorter)
+        finals = []
+        for r in reward_lists:
+            if len(r) == 0:
+                continue
+            if len(r) >= 10:
+                finals.append(float(np.mean(r[-10:])))
+            else:
+                finals.append(float(np.mean(r)))
         if not finals:
             warnings.append(f"No final rewards for config {cfg_key}")
             continue
@@ -81,13 +94,27 @@ def aggregate(groups: Dict, top_k: int, smooth_window: int) -> Tuple[List, List]
             std = moving_average(std, smooth_window)
 
         episodes = np.arange(1, len(mean) + 1)
-        ranked.append((runs["meta"], episodes, mean, std, float(np.mean(finals))))
+        cfg_runs.append((runs["meta"], episodes, mean, std, float(np.mean(finals))))
 
-    ranked.sort(key=lambda x: x[4], reverse=True)
-    return ranked[:top_k], warnings
+    if group_by is None:
+        cfg_runs.sort(key=lambda x: x[4], reverse=True)
+        return cfg_runs[:top_k], warnings
+
+    # Bucket by the requested hyperparameter
+    buckets: Dict[str, List] = {}
+    for meta, episodes, mean, std, mean_final in cfg_runs:
+        group_val = meta.get(group_by)
+        buckets.setdefault(group_val, []).append((meta, episodes, mean, std, mean_final))
+
+    grouped_runs = []
+    for group_val, items in buckets.items():
+        items.sort(key=lambda x: x[4], reverse=True)
+        grouped_runs.extend(items[:top_per_group])
+
+    return grouped_runs, warnings
 
 
-def plot_top_runs(runs: List, out_dir: str, top_k: int) -> str:
+def plot_top_runs(runs: List, out_dir: str, label: str) -> str:
     import matplotlib.pyplot as plt  # Local import so the script fails fast if missing
 
     if not runs:
@@ -96,23 +123,24 @@ def plot_top_runs(runs: List, out_dir: str, top_k: int) -> str:
     os.makedirs(out_dir, exist_ok=True)
     plt.figure(figsize=(10, 6))
     for meta, episodes, mean, std, mean_final in runs:
-        label = (
+        label_str = (
             f"fv={meta['fv']} lr={meta['lr']} rollout={meta['rollout']} "
             f"hidden={'x'.join(map(str, meta['hidden']))} clip={meta['clip']} "
             f"temp={meta['temp']} maxep={meta['maxep']} "
             f"(final≈{mean_final:.2f})"
         )
-        plt.plot(episodes, mean, label=label)
+        plt.plot(episodes, mean, label=label_str)
         plt.fill_between(episodes, mean - std, mean + std, alpha=0.15)
 
     plt.xlabel("Episode")
     plt.ylabel("Reward")
-    plt.title(f"Top {top_k} sweep configs: mean ± std reward across seeds")
+    plt.title(label)
     plt.legend()
     plt.grid(alpha=0.3)
     plt.tight_layout()
 
-    out_path = os.path.join(out_dir, f"reward_curves_top{top_k}.png")
+    safe_label = label.lower().replace(" ", "_").replace("/", "_")
+    out_path = os.path.join(out_dir, f"reward_curves_{safe_label}.png")
     plt.savefig(out_path, dpi=200)
     return out_path
 
@@ -127,6 +155,17 @@ def main():
         type=int,
         default=1,
         help="Optional moving-average window (in episodes) applied to mean/std curves.",
+    )
+    parser.add_argument(
+        "--group-by",
+        choices=["lr", "clip", "hidden", "rollout", "fv"],
+        help="Group plots by a hyperparameter (plots top-per-group instead of global top-k).",
+    )
+    parser.add_argument(
+        "--top-per-group",
+        type=int,
+        default=1,
+        help="When grouping, how many configs to plot per group (ranked by mean final reward).",
     )
     args = parser.parse_args()
 
@@ -149,11 +188,16 @@ def main():
         grouped.setdefault(cfg_key, {"meta": meta, "rewards": []})
         grouped[cfg_key]["rewards"].append(load_rewards(path))
 
-    top_runs, warnings = aggregate(grouped, args.top_k, args.smooth)
+    top_runs, warnings = aggregate(grouped, args.top_k, args.smooth, group_by=args.group_by, top_per_group=args.top_per_group)
     for w in warnings:
         print(f"Warning: {w}")
 
-    out_path = plot_top_runs(top_runs, args.out_dir, args.top_k)
+    if args.group_by:
+        title = f"Top {args.top_per_group} per {args.group_by}: mean ± std reward across seeds"
+    else:
+        title = f"Top {args.top_k} sweep configs: mean ± std reward across seeds"
+
+    out_path = plot_top_runs(top_runs, args.out_dir, title)
     print(f"Wrote plot to {out_path}")
 
 
